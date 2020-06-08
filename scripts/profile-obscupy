@@ -1,0 +1,100 @@
+#!/usr/bin/env python3
+"""
+Profile features - comparison between obspy and obscupy.
+"""
+
+from typing import Union, Iterable
+
+
+def time_function(function, data_len):
+    """
+    Time a given function or method.
+
+    Parameters
+    ----------
+    function
+    data_len
+
+    Returns
+    -------
+
+    """
+    return
+
+
+def plot_times(times: dict, data_len: Union[int, Iterable]):
+    """
+    Plot the time difference between obspy and obscupy
+
+    Parameters
+    ----------
+    times
+    data_len
+
+    Returns
+    -------
+
+    """
+    import matplotlib.pyplot as plt
+
+    fig, ax = plt.subplots()
+
+    return fig
+
+
+def write_times(times: dict, data_len: Union[int, Iterable]):
+    """
+    Write out a csv of the times between obspy and obscupy.
+
+    Parameters
+    ----------
+    times
+    data_len
+
+    Returns
+    -------
+
+    """
+    return
+
+
+def profile(function: str, data_len: Union[int, Iterable]):
+    """
+    Profile a given function or method.
+
+    Parameters
+    ----------
+    function
+    data_len
+
+    Returns
+    -------
+
+    """
+    import matplotlib.pyplot as plt
+
+    obspy_times = time_function(function, data_len)
+
+    import obscupy
+    obscupy_times = time_function(function, data_len)
+
+    times = {"ObsPy": obspy_times, "ObsCuPy": obscupy_times}
+    fig = plot_times(times, data_len)
+    plt.show()
+    write_times(times, data_len)
+
+
+if __name__ == "__main__":
+    import argparse
+
+    parser = argparse.ArgumentParser("ObsCuPy Profiler")
+
+    parser.add_argument(
+        "-f", "--function", help="Function to profile", type=str,
+        required=True)
+    parser.add_argument(
+        "-l", "--data-len", help="Length(s) of data to run for",
+        default=8640000)
+
+    args = parser.parse_args()
+    profile(args.function, args.data_len)
