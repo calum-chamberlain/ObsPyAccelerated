@@ -14,7 +14,8 @@ of your CUDA or OpenCL compatible GPU.
 ## Progress
 
 To keep track of progress in adding methods, check out the long-standing
-github issue.  Feel free to add to the list of functions and methods that could
+github [issue](https://github.com/calum-chamberlain/ObsCuPy/issues/1). 
+Feel free to add to the list of functions and methods that could
 be accelerated. Also feel free to contribute!
 
 ## License
