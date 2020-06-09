@@ -1,13 +1,13 @@
-# ObsCuPy: CUDA enhanced ObsPy
+# ObsPyAccelerated: GPU enhanced ObsPy
 
 Accelerate your observational seismology workflows by harnessing the power
-of your CUDA-compatible GPU.
+of your CUDA or OpenCL compatible GPU.
 
 ## Aims
 
 1. Provide a series of drop-in replacements for
    [ObsPy](https://github.com/obspy/obspy) functions on waveform data
-   accelerated by [cupy](https://github.com/cupy/cupy).
+   accelerated by [cupy](https://github.com/cupy/cupy) or [clpy](https://github.com/fixstars/clpy).
 2. Monkey-patch methods of ObsPy `Trace` objects to provide simple speed-ups
    to common seismological operations.
 

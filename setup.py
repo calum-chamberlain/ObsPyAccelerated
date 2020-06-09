@@ -10,12 +10,12 @@ import glob
 import os
 import sys
 import shutil
-import obscupy
+import obspyacc
 
-VERSION = obscupy.__version__
+VERSION = obspyacc.__version__
 
 long_description = '''
-CUDA accelerated ObsPy
+GPU accelerated ObsPy
 '''
 
 scriptfiles = [f for f in glob.glob("scripts/*") if os.path.isfile(f)]
@@ -36,9 +36,9 @@ def setup_package():
     setup_args = {
         'name': 'ObsCuPy',
         'version': VERSION,
-        'description': 'ObsCuPy - CUDA accelerated ObsPy',
+        'description': 'ObsPyAccelerated: GPU accelerated ObsPy',
         'long_description': long_description,
-        'url': 'https://github.com/calum-chamberlain/ObsCuPy',
+        'url': 'https://github.com/calum-chamberlain/ObsPyAccelerated',
         'author': 'Calum Chamberlain',
         'author_email': 'calum.chamberlain@vuw.ac.nz',
         'license': 'LGPL',
@@ -51,7 +51,7 @@ def setup_package():
             'Programming Language :: Python :: 3.7',
             'Programming Language :: Python :: 3.8',
         ],
-        'keywords': 'CUDA GPU ObsPy Observational Seismology',
+        'keywords': 'CUDA OpenCL GPU ObsPy Observational Seismology',
         'scripts': scriptfiles,
         'install_requires': install_requires,
         'setup_requires': ['pytest-runner'],
@@ -72,7 +72,7 @@ def setup_package():
         pass
     else:
         setup_args['packages'] = [
-            'obscupy', 'obscupy.core', 'obscupy.signal']
+            'obspyacc', 'obspyacc.core', 'obspyacc.signal']
     if os.path.isdir("build"):
         shutil.rmtree("build")
     setup(**setup_args)
