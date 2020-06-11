@@ -4,31 +4,22 @@ Methods to monkey-patch the obspy.core.Trace object.
 
 import numpy as np
 
-from obspy import Trace
+import obspy
 from obspy.core.util.decorator import skip_if_no_data
 
-from obspyacc import gpulib, patches
+from obspyacc import gpulib
+from obspyacc.helpers.patcher import obspy_docs
 
 
-@patches(method_or_function=Trace.detrend)
-def tester_func(trace: Trace):
-    """
-    {obspy_docs}
-    """
-
-    print(trace)
-    print("Rapping along")
-
-
-@patches(method_or_function=Trace.resample)
+@obspy_docs(method_or_function=obspy.Trace.resample)
 @skip_if_no_data
 def gpu_resample(
-    self: Trace,
+    self: obspy.Trace,
     sampling_rate: float,
     window: str,
     no_filter: bool,
     strict_length: bool
-) -> Trace:
+) -> obspy.Trace:
     """
     GPU accelerated frequency domain resampling.
 
@@ -96,3 +87,14 @@ def gpu_resample(
     self.stats.sampling_rate = sampling_rate
 
     return self
+
+# -------------------- MONKEYPATCH METHODS -------------------------
+
+
+obspy.Trace.resample = gpu_resample
+
+
+if __name__ == "__main__":
+    import doctest
+
+    doctest.testmod()

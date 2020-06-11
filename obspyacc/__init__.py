@@ -12,7 +12,8 @@ except Exception as e:
         import clpy as gpulib
     except Exception as e:
         print(f"Could not import clpy due to {e}")
-        raise NotImplementedError("Neither cupy nor clpy installed.")
+        # raise NotImplementedError("Neither cupy nor clpy installed.")
+        import numpy as gpulib
 
-from obspyacc.helpers.patcher import patches
-# TODO: Monkey patching, import mapping
+# Import monkey patches
+from .core.trace import gpu_resample

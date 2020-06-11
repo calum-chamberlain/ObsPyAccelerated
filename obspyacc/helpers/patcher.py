@@ -7,12 +7,12 @@ import textwrap
 from typing import Callable
 
 
-def patches(method_or_function: Callable, replace_doc: str = "obspy_docs"):
+def obspy_docs(method_or_function: Callable, replace_doc: str = "obspy_docs"):
     """
-    Decorator for monkey-patching obspy methods or functions.
+    Decorator for adding obspy docs to obspyacc.
 
-    Will monkey-patch the obspy function or method, and replace {replace_doc}
-    in the wrapped functions doc-string with the obspy doc-string.
+    Will replace {replace_doc} in the wrapped functions doc-string with the
+    obspy doc-string.
 
     Parameters
     ----------
@@ -25,7 +25,6 @@ def patches(method_or_function: Callable, replace_doc: str = "obspy_docs"):
     def _wrap(func):
         nonlocal method_or_function
 
-        print(f"Original docstring: {func.__doc__}")
         docstring = func.__doc__
         # Replace {obspy_doc}
         _replace = "{%s}" % replace_doc
@@ -39,10 +38,6 @@ def patches(method_or_function: Callable, replace_doc: str = "obspy_docs"):
                 textwrap.dedent(method_or_function.__doc__), spaces)}
             docstring = docstring.replace(line, line.format(**new))
         func.__doc__ = docstring
-        print(f"Wrapped docstring: {func.__doc__}")
-        # monkey patch
-        # TODO: Patching doesn't work.
-        method_or_function = func
         return func
 
     return _wrap
