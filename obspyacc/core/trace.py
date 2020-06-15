@@ -2,6 +2,8 @@
 Methods to monkey-patch the obspy.core.Trace object.
 """
 
+from typing import Union, Callable
+
 import numpy as np
 
 import obspy
@@ -16,17 +18,18 @@ from obspyacc.helpers.patcher import obspy_docs
 def gpu_resample(
     self: obspy.Trace,
     sampling_rate: float,
-    window: str,
-    no_filter: bool,
-    strict_length: bool
+    window: Union[str, Callable, np.ndarray] = "hanning",
+    no_filter: bool = True,
+    strict_length: bool = False
 ) -> obspy.Trace:
     """
     GPU accelerated frequency domain resampling.
 
     {obspy_docs}
     """
+    from future.utils import native_str
     from scipy.signal import get_window
-    from scipy.fftpack import rfft, irfft
+
     factor = self.stats.sampling_rate / float(sampling_rate)
     # check if end time changes and this is not explicitly allowed
     if strict_length:
@@ -44,15 +47,12 @@ def gpu_resample(
         freq = self.stats.sampling_rate * 0.5 / float(factor)
         self.filter('lowpass_cheby_2', freq=freq, maxorder=12)
 
+    # Move data to the GPU
+    gpu_data = gpulib.asarray(self.data.newbyteorder("="))
     # resample in the frequency domain. Make sure the byteorder is native.
-    x = rfft(self.data.newbyteorder("="))
-    # Cast the value to be inserted to the same dtype as the array to avoid
-    # issues with numpy rule 'safe'.
-    x = np.insert(x, 1, x.dtype.type(0))
-    if self.stats.npts % 2 == 0:
-        x = np.append(x, [0])
-    x_r = x[::2]
-    x_i = x[1::2]
+    x = gpulib.fft.rfft(gpu_data)
+    x_r = x.real
+    x_i = x.imag
 
     if window is not None:
         if callable(window):
@@ -66,10 +66,12 @@ def gpu_resample(
         else:
             large_w = np.fft.ifftshift(get_window(native_str(window),
                                                   self.stats.npts))
+        large_w = gpulib.asarray(large_w)
         x_r *= large_w[:self.stats.npts // 2 + 1]
         x_i *= large_w[:self.stats.npts // 2 + 1]
 
-    # interpolate
+    # interpolate - no cuda interpolation, move to cpu
+    x_r, x_i = gpulib.asnumpy(x_r), gpulib.asnumpy(x_i)
     num = int(self.stats.npts / factor)
     df = 1.0 / (self.stats.npts * self.stats.delta)
     d_large_f = 1.0 / num * sampling_rate
@@ -77,13 +79,14 @@ def gpu_resample(
     n_large_f = num // 2 + 1
     large_f = d_large_f * np.arange(0, n_large_f, dtype=np.int32)
     large_y = np.zeros((2 * n_large_f))
-    large_y[::2] = np.interp(large_f, f, x_r)
-    large_y[1::2] = np.interp(large_f, f, x_i)
+    x_r = np.interp(large_f, f, x_r)
+    x_i = np.interp(large_f, f, x_i)
+    large_y = np.vectorize(complex)(x_r, x_i)
 
-    large_y = np.delete(large_y, 1)
-    if num % 2 == 0:
-        large_y = np.delete(large_y, -1)
-    self.data = irfft(large_y) * (float(num) / float(self.stats.npts))
+    # IFFT on the gpu.
+    self.data = gpulib.asnumpy(
+        gpulib.fft.irfft(gpulib.asarray(large_y)) *
+        (float(num) / float(self.stats.npts)))
     self.stats.sampling_rate = sampling_rate
 
     return self
@@ -91,6 +94,7 @@ def gpu_resample(
 # -------------------- MONKEYPATCH METHODS -------------------------
 
 
+setattr(obspy.Trace, "_obspy_resample", obspy.Trace.resample)
 obspy.Trace.resample = gpu_resample
 
 

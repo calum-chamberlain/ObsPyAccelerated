@@ -73,9 +73,10 @@ def profile(function: str, data_len: Union[int, Iterable]):
     """
     import matplotlib.pyplot as plt
 
-    obspy_times = time_function(function, data_len)
-
-    import obscupy
+    obspy_function = function.split('.')
+    obspy_function[-1] = "_" + obspy_function[-1]
+    obspy_function = '.'.join(obspy_function)
+    obspy_times = time_function(obspy_function, data_len)
     obscupy_times = time_function(function, data_len)
 
     times = {"ObsPy": obspy_times, "ObsCuPy": obscupy_times}
