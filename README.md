@@ -1,7 +1,7 @@
 # ObsPyAccelerated: GPU enhanced ObsPy
 
 Accelerate your observational seismology workflows by harnessing the power
-of your CUDA or OpenCL compatible GPU.
+of your CUDA compatible GPU.
 
 ## Aims
 
