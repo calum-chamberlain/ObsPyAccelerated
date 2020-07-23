@@ -80,6 +80,7 @@ def profile(function: str, data_len: Union[int, Iterable]):
     obscupy_times = time_function(function, data_len)
 
     times = {"ObsPy": obspy_times, "ObsCuPy": obscupy_times}
+    print(times)
     fig = plot_times(times, data_len)
     plt.show()
     write_times(times, data_len)

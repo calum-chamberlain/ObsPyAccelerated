@@ -9,8 +9,31 @@ import numpy as np
 import obspy
 from obspy.core.util.decorator import skip_if_no_data
 
-from obspyacc import signal, fftlib, gpulib
+from obspyacc import signal, fftlib, gpulib, HAS_GPU
 from obspyacc.helpers.patcher import obspy_docs
+
+
+# --------------- DATA SYNCHRONISATION --------------
+def set_data(
+    self: obspy.Trace,
+    data: Union[np.ndarray, gpulib.ndarray],
+):
+    if isinstance(data, np.ndarray):  # Convert to numpy
+        self._data = data
+        self._gpu_data = gpulib.asarray(data)
+    else:  # Convert from cupy array to numpy
+        self._gpu_data = data
+        self._data = gpulib.asnumpy(data)
+
+
+def get_data(self: obspy.Trace):
+    return self._data
+
+
+setattr(obspy.Trace, "data", property(fget=get_data, fset=set_data))
+
+
+# --------------- NEW METHODS ------------------------
 
 
 @obspy_docs(method_or_function=obspy.Trace.resample)
@@ -45,10 +68,14 @@ def gpu_resample(
         self.filter('lowpass_cheby_2', freq=freq, maxorder=12)
 
     num_samples = int(self.stats.npts / factor)
-    data = signal.resample(x=self.data, num=num_samples, window=window)
+    if HAS_GPU:
+        data = self._gpu_data
+    else:
+        data = self.data
+    data = signal.resample(x=data, num=num_samples, window=window)
     if num_samples % 2 == 0:  # Hack to give the same result as obspy.
         data = fftlib.irfft(fftlib.rfft(data), n=num_samples)
-    self.data = data.get()
+    self.data = data
     self.stats.sampling_rate = sampling_rate
 
     return self
