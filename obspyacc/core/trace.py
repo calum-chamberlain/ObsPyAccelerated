@@ -9,8 +9,7 @@ import numpy as np
 import obspy
 from obspy.core.util.decorator import skip_if_no_data
 
-from scipy import signal
-from obspyacc import gpulib
+from obspyacc import signal, fftlib, gpulib
 from obspyacc.helpers.patcher import obspy_docs
 
 
@@ -45,8 +44,11 @@ def gpu_resample(
         freq = self.stats.sampling_rate * 0.5 / float(factor)
         self.filter('lowpass_cheby_2', freq=freq, maxorder=12)
 
-    num_samples = self.stats.npts / factor
-    self.data = signal.resample(x=self.data, num=num_samples, window=window)
+    num_samples = int(self.stats.npts / factor)
+    data = signal.resample(x=self.data, num=num_samples, window=window)
+    if num_samples % 2 == 0:  # Hack to give the same result as obspy.
+        data = fftlib.irfft(fftlib.rfft(data), n=num_samples)
+    self.data = data.get()
     self.stats.sampling_rate = sampling_rate
 
     return self
