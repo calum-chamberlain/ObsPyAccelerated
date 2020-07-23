@@ -18,12 +18,8 @@ def set_data(
     self: obspy.Trace,
     data: Union[np.ndarray, gpulib.ndarray],
 ):
-    if isinstance(data, np.ndarray):  # Convert to numpy
-        self._data = data
-        self._gpu_data = gpulib.asarray(data)
-    else:  # Convert from cupy array to numpy
-        self._gpu_data = data
-        self._data = gpulib.asnumpy(data)
+    self._data = data
+    self._gpu_data = gpulib.asarray(data)
 
 
 def get_data(self: obspy.Trace):
@@ -32,6 +28,7 @@ def get_data(self: obspy.Trace):
 
 setattr(obspy.Trace, "data", property(fget=get_data, fset=set_data))
 
+# TODO: It would be great to have a way to not copy between VRAM and RAM all the time.
 
 # --------------- NEW METHODS ------------------------
 
@@ -75,7 +72,10 @@ def gpu_resample(
     data = signal.resample(x=data, num=num_samples, window=window)
     if num_samples % 2 == 0:  # Hack to give the same result as obspy.
         data = fftlib.irfft(fftlib.rfft(data), n=num_samples)
-    self.data = data
+    if HAS_GPU:
+        self.data = data.get()
+    else:
+        self.data = data
     self.stats.sampling_rate = sampling_rate
 
     return self
