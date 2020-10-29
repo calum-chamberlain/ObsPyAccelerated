@@ -3,23 +3,51 @@
 Profile features - comparison between obspy and obscupy.
 """
 
-from typing import Union, Iterable
+import logging
+import time
+
+from typing import Union, Iterable, List, Tuple, Callable
 
 
-def time_function(function, data_len):
+Logger = logging.getLogger("Profiler")
+
+
+def time_function(
+    function: Callable,
+    data_len: Union[int, Iterable],
+    repeats: int = 3
+) -> List[Tuple[int, float]]:
     """
-    Time a given function or method.
+    Time a given function.
 
     Parameters
     ----------
     function
     data_len
+    repeats
 
     Returns
     -------
 
     """
-    return
+    if not isinstance(data_len, Iterable):
+        data_len = (data_len, )
+    times = list()
+    for _data_len in data_len:
+        run_time = 0
+        for repeat in range(repeats):
+            Logger.debug(
+                f"Running for data length: {_data_len}, repeat {repeat}")
+            # TODO: time.time might not be the most accurate way to do this.
+            tic = time.time()
+            # TODO: Call function
+            toc = time.time()
+            run_time += (toc - tic)
+        run_time /= repeats
+        Logger.info(
+            f"{function} took {run_time:0.2e}s for data length: {_data_len}")
+        times.append((_data_len, run_time))
+    return times
 
 
 def plot_times(times: dict, data_len: Union[int, Iterable]):
