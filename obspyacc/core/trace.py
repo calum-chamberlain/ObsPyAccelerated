@@ -5,6 +5,7 @@ Methods to monkey-patch the obspy.core.Trace object.
 from typing import Union, Callable
 
 import numpy as np
+import time
 
 import obspy
 from obspy.core.util.decorator import skip_if_no_data
@@ -14,21 +15,70 @@ from obspyacc.helpers.patcher import obspy_docs
 
 
 # --------------- DATA SYNCHRONISATION --------------
-def set_data(
+# TODO: At the moment, you can break this by changing the underlying arrays in-place
+setattr(obspy.Trace, "_gpu_data_update_time", 0)
+setattr(obspy.Trace, "_data_update_time", 0)
+
+
+def _set_data(
     self: obspy.Trace,
-    data: Union[np.ndarray, gpulib.ndarray],
+    data: np.ndarray,
 ):
     self._data = data
-    self._gpu_data = gpulib.asarray(data)
+    self._data_update_time = time.time()
 
 
-def get_data(self: obspy.Trace):
+def _get_data(self: obspy.Trace):
+    if self._gpu_data_update_time > self._data_update_time:
+        print("Synchronising gpu data to cpu")
+        # Synchronise
+        self.data = gpulib.asnumpy(self._gpu_data)
+        self._data_update_time = self._gpu_data_update_time
     return self._data
 
 
-setattr(obspy.Trace, "data", property(fget=get_data, fset=set_data))
+setattr(obspy.Trace, "data", property(fget=_get_data, fset=_set_data))
 
-# TODO: It would be great to have a way to not copy between VRAM and RAM all the time.
+
+def _set_gpu_data(
+    self: obspy.Trace,
+    data: gpulib.array,
+):
+    self.__gpu_data = data
+    self._gpu_data_update_time = time.time()
+
+
+def _get_gpu_data(self: obspy.Trace):
+    if self._data_update_time > self._gpu_data_update_time:
+        print("Synchronising cpu data to gpu")
+        # Synchronise
+        self._gpu_data = gpulib.asarray(self.data)
+        self._gpu_data_update_time = self._data_update_time
+    return self.__gpu_data
+
+
+setattr(obspy.Trace, "_gpu_data",
+        property(fget=_get_gpu_data, fset=_set_gpu_data))
+
+
+# --------------- GPU MEMORY MANAGEMENT --------------
+
+def release_vram(self: obspy.Trace):
+    mempool = gpulib.get_default_memory_pool()
+    pinned_mempool = gpulib.get_default_pinned_memory_pool()
+    mempool.free_all_blocks()
+    pinned_mempool.free_all_blocks()
+
+
+setattr(obspy.Trace, "release_vram", release_vram)
+
+
+def delete(self: obspy.Trace):
+    # Clean up
+    self.release_vram()
+
+
+setattr(obspy.Trace, "__del__", delete)
 
 # --------------- NEW METHODS ------------------------
 
@@ -73,7 +123,7 @@ def gpu_resample(
     if num_samples % 2 == 0:  # Hack to give the same result as obspy.
         data = fftlib.irfft(fftlib.rfft(data), n=num_samples)
     if HAS_GPU:
-        self.data = data.get()
+        self._gpu_data = data.get()  # synchronisation taken care of elsewhere
     else:
         self.data = data
     self.stats.sampling_rate = sampling_rate
