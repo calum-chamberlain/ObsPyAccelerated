@@ -1,0 +1,3 @@
+"""
+ObsPyAccelerated: CUDA accelerated ObsPy
+"""

@@ -4,13 +4,15 @@ Methods to monkey-patch the obspy.core.Trace object.
 
 from typing import Union, Callable
 
+import cupy
 import numpy as np
 import time
 
 import obspy
 from obspy.core.util.decorator import skip_if_no_data
 
-from obspyacc import signal, fftlib, gpulib, HAS_GPU
+from obspyacc import gpulib, HAS_GPU
+from obspyacc.signal.resample import resample
 from obspyacc.helpers.patcher import obspy_docs
 
 
@@ -30,7 +32,7 @@ def _set_data(
 
 def _get_data(self: obspy.Trace):
     if self._gpu_data_update_time > self._data_update_time:
-        print("Synchronising gpu data to cpu")
+        # print("Synchronising gpu data to cpu")
         # Synchronise
         self.data = gpulib.asnumpy(self._gpu_data)
         self._data_update_time = self._gpu_data_update_time
@@ -50,7 +52,7 @@ def _set_gpu_data(
 
 def _get_gpu_data(self: obspy.Trace):
     if self._data_update_time > self._gpu_data_update_time:
-        print("Synchronising cpu data to gpu")
+        # print("Synchronising cpu data to gpu")
         # Synchronise
         self._gpu_data = gpulib.asarray(self.data)
         self._gpu_data_update_time = self._data_update_time
@@ -97,6 +99,7 @@ def gpu_resample(
 
     {obspy_docs}
     """
+    from scipy.signal import get_window
     factor = self.stats.sampling_rate / float(sampling_rate)
     # check if end time changes and this is not explicitly allowed
     if strict_length:
@@ -114,14 +117,34 @@ def gpu_resample(
         freq = self.stats.sampling_rate * 0.5 / float(factor)
         self.filter('lowpass_cheby_2', freq=freq, maxorder=12)
 
-    num_samples = int(self.stats.npts / factor)
+    # Get the window to convolve and stabalise resampling
+    if window is not None:
+        if callable(window):
+            large_w = window(np.fft.fftfreq(self.stats.npts))
+        elif isinstance(window, np.ndarray):
+            if window.shape != (self.stats.npts,):
+                msg = "Window has the wrong shape. Window length must " + \
+                        "equal the number of points."
+                raise ValueError(msg)
+            large_w = window
+        else:
+            large_w = np.fft.ifftshift(get_window(window, self.stats.npts))
+    else:
+        large_w = None
+
+    # Do the resampling!
     if HAS_GPU:
         data = self._gpu_data
+        # Move the window to the GPU
+        if large_w is not None:
+            large_w = cupy.asarray(large_w)
     else:
         data = self.data
-    data = signal.resample(x=data, num=num_samples, window=window)
-    if num_samples % 2 == 0:  # Hack to give the same result as obspy.
-        data = fftlib.irfft(fftlib.rfft(data), n=num_samples)
+    data = resample(
+        data=data, delta_in=self.stats.delta, factor=factor,
+        sampling_rate_out=sampling_rate, large_w=large_w)
+    # if num_samples % 2 == 0:  # Hack to give the same result as obspy.
+    #     data = fftlib.irfft(fftlib.rfft(data), n=num_samples)
     if HAS_GPU:
         self._gpu_data = data.get()  # synchronisation taken care of elsewhere
     else:

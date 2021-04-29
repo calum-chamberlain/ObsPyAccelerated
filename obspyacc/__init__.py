@@ -1,5 +1,5 @@
 """
-ObsCuPy: CUDA accelerated ObsPy
+ObsPyAccelerated: CUDA accelerated ObsPy
 """
 
 __version__ = "0.0.1a"
@@ -11,13 +11,6 @@ try:
 except Exception as e:
     print(f"Could not import cupy due to {e}")
     import numpy as gpulib
-    HAS_GPU = False
-
-try:
-    import cusignal as signal
-except Exception as e:
-    print(f"Could not import cusignal due to {e}")
-    from scipy import signal
     HAS_GPU = False
 
 try:
