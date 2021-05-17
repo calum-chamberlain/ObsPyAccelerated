@@ -31,7 +31,7 @@ def setup_package():
         build_requires = ['numpy>=1.6, <2.0']
 
     install_requires = [
-        'numpy>=1.12', 'matplotlib>=1.3.0', 'obspy>=1.0.3']
+        'numpy>=1.12', 'matplotlib>=1.3.0', 'obspy>=1.0.3', 'numba']
 
     setup_args = {
         'name': 'ObsCuPy',
@@ -57,7 +57,7 @@ def setup_package():
         'setup_requires': ['pytest-runner'],
         'tests_require': ['pytest>=2.0.0', 'pytest-cov', 'pytest-pep8',
                           'pytest-xdist', 'pytest-rerunfailures',
-                          'obspy>=1.1.0'],
+                          'obspy>=1.1.0', 'numba'],
     }
 
     if using_setuptools:

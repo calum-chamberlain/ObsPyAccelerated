@@ -23,4 +23,5 @@ except Exception as e:
 
 
 # Import monkey patches
-from .core.trace import gpu_resample
+from .core.trace import trace_resample
+from .core.stream import stream_resample

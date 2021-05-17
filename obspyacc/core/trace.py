@@ -12,7 +12,8 @@ import obspy
 from obspy.core.util.decorator import skip_if_no_data
 
 from obspyacc import gpulib, HAS_GPU
-from obspyacc.signal.resample import resample
+from obspyacc.signal.resample import (
+    cupy_resample, numba_resample, prep_for_resample, get_resample_window)
 from obspyacc.helpers.patcher import obspy_docs
 
 
@@ -36,7 +37,10 @@ def _get_data(self: obspy.Trace):
         # Synchronise
         self.data = gpulib.asnumpy(self._gpu_data)
         self._data_update_time = self._gpu_data_update_time
-    return self._data
+    try:
+        return self._data
+    except AttributeError:
+        raise AttributeError("Ensure you imported obspyacc before code")
 
 
 setattr(obspy.Trace, "data", property(fget=_get_data, fset=_set_data))
@@ -56,7 +60,10 @@ def _get_gpu_data(self: obspy.Trace):
         # Synchronise
         self._gpu_data = gpulib.asarray(self.data)
         self._gpu_data_update_time = self._data_update_time
-    return self.__gpu_data
+    try:
+        return self.__gpu_data
+    except AttributeError:
+        raise AttributeError("Ensure you imported obspyacc before code")
 
 
 setattr(obspy.Trace, "_gpu_data",
@@ -82,70 +89,48 @@ def delete(self: obspy.Trace):
 
 setattr(obspy.Trace, "__del__", delete)
 
-# --------------- NEW METHODS ------------------------
+# --------------- GPU METHODS ------------------------
 
 
 @obspy_docs(method_or_function=obspy.Trace.resample)
 @skip_if_no_data
-def gpu_resample(
+def trace_resample(
     self: obspy.Trace,
     sampling_rate: float,
     window: Union[str, Callable, np.ndarray] = "hanning",
     no_filter: bool = True,
-    strict_length: bool = False
+    strict_length: bool = False,
+    target: str = "GPU",
+    *args, **kwargs
 ) -> obspy.Trace:
     """
     GPU accelerated frequency domain resampling.
 
     {obspy_docs}
     """
-    from scipy.signal import get_window
-    factor = self.stats.sampling_rate / float(sampling_rate)
-    # check if end time changes and this is not explicitly allowed
-    if strict_length:
-        if len(self.data) % factor != 0.0:
-            msg = "End time of trace would change and strict_length=True."
-            raise ValueError(msg)
-    # do automatic lowpass filtering
-    if not no_filter:
-        # be sure filter still behaves good
-        if factor > 16:
-            msg = "Automatic filter design is unstable for resampling " + \
-                  "factors (current sampling rate/new sampling rate) " + \
-                  "above 16. Manual resampling is necessary."
-            raise ArithmeticError(msg)
-        freq = self.stats.sampling_rate * 0.5 / float(factor)
-        self.filter('lowpass_cheby_2', freq=freq, maxorder=12)
+    assert target.upper() in ("CPU", "GPU"), f"Target {target} not supported"
+    self, factor = prep_for_resample(
+        trace=self, sampling_rate=sampling_rate, no_filter=no_filter,
+        strict_length=strict_length)
 
     # Get the window to convolve and stabalise resampling
-    if window is not None:
-        if callable(window):
-            large_w = window(np.fft.fftfreq(self.stats.npts))
-        elif isinstance(window, np.ndarray):
-            if window.shape != (self.stats.npts,):
-                msg = "Window has the wrong shape. Window length must " + \
-                        "equal the number of points."
-                raise ValueError(msg)
-            large_w = window
-        else:
-            large_w = np.fft.ifftshift(get_window(window, self.stats.npts))
-    else:
-        large_w = None
+    large_w = get_resample_window(window=window, npts=self.stats.npts)
 
     # Do the resampling!
-    if HAS_GPU:
+    if target.upper() == "GPU" and HAS_GPU:
         data = self._gpu_data
         # Move the window to the GPU
         if large_w is not None:
             large_w = cupy.asarray(large_w)
+        resample_func = cupy_resample
     else:
         data = self.data
-    data = resample(
-        data=data, delta_in=self.stats.delta, factor=factor,
-        sampling_rate_out=sampling_rate, large_w=large_w)
-    # if num_samples % 2 == 0:  # Hack to give the same result as obspy.
-    #     data = fftlib.irfft(fftlib.rfft(data), n=num_samples)
-    if HAS_GPU:
+        resample_func = numba_resample
+
+    data = resample_func(
+        data=data, npts_in=self.stats.npts, delta_in=self.stats.delta,
+        factor=factor, sampling_rate_out=sampling_rate, large_w=large_w)
+    if target.upper() == "GPU" and HAS_GPU:
         self._gpu_data = data.get()  # synchronisation taken care of elsewhere
     else:
         self.data = data
@@ -155,9 +140,8 @@ def gpu_resample(
 
 # -------------------- MONKEYPATCH METHODS -------------------------
 
-
 setattr(obspy.Trace, "_obspy_resample", obspy.Trace.resample)
-obspy.Trace.resample = gpu_resample
+obspy.Trace.resample = trace_resample
 
 
 if __name__ == "__main__":
