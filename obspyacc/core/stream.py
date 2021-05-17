@@ -5,6 +5,7 @@ Methods for monkey patching ObsPy Stream methods.
 from typing import Union, Callable
 
 import numpy as np
+from scipy.fft import next_fast_len
 
 import obspy
 from obspy.core.util.decorator import skip_if_no_data
@@ -20,6 +21,21 @@ else:
     import numpy as cp
 
 # ---------------------- METHODS -------------------------------
+
+
+def _obspy_resample(
+    stream: obspy.core.Stream,
+    sampling_rate: float,
+    window: Union[str, Callable, np.ndarray] = "hanning",
+    no_filter: bool = True,
+    strict_length: bool = False,
+) -> obspy.core.Stream:
+    for tr in stream:
+        tr._obspy_resample(
+            sampling_rate=sampling_rate, window=window, no_filter=no_filter,
+            strict_length=strict_length)
+    return stream
+
 
 @obspy_docs(method_or_function=obspy.Stream.resample)
 @skip_if_no_data
@@ -48,8 +64,8 @@ def stream_resample(
     else:
         traces = stream.traces
 
-    factors, large_ws, data_in, npts_in, delta_in, sampling_rate_out = (
-        [], [], [], [], [], [])
+    factors, large_ws, data_in, npts_in, delta_in, sampling_rate_out, fftlens = (
+        [], [], [], [], [], [], [])
     for trace in traces:
         # Prep the data
         trace, factor = prep_for_resample(
@@ -58,7 +74,8 @@ def stream_resample(
 
 
         # Get the window first
-        large_w = get_resample_window(window=window, npts=trace.stats.npts)
+        fftlen = next_fast_len(trace.stats.npts)
+        large_w = get_resample_window(window=window, npts=fftlen)
 
         if target.upper() == "GPU" and HAS_GPU:
             data = trace._gpu_data
@@ -74,11 +91,19 @@ def stream_resample(
         npts_in.append(trace.stats.npts)
         delta_in.append(trace.stats.delta)
         sampling_rate_out.append(sampling_rate)
+        fftlens.append(fftlen)
 
-    data_out = multi_resample(
-        data=data_in, npts_in=npts_in, delta_in=delta_in,
-        factor=factors, sampling_rate_out=sampling_rate_out,
-        large_w=large_ws, target=target, max_workers=max_workers)
+    try:
+        data_out = multi_resample(
+            data=data_in, npts_in=npts_in, fftlen=fftlens, delta_in=delta_in,
+            factor=factors, sampling_rate_out=sampling_rate_out,
+            large_w=large_ws, target=target, max_workers=max_workers)
+    except Exception as e:
+        print(e)
+        for tr in stream:
+            tr.resample(sampling_rate=sampling_rate, window=window,
+                        target=target, no_filter=no_filter,
+                        strict_length=strict_length)
 
     for i, trace in enumerate(traces):
         if target.upper() == "GPU" and HAS_GPU:
@@ -92,7 +117,10 @@ def stream_resample(
 
 # ----------------------------- MONKEY PATCH ------------------------------
 
-setattr(obspy.Stream, "_obspy_resample", obspy.Stream.resample)
+# Because we have overloaded the lower trace.resample method this still calls
+# the accelerated methods.
+# setattr(obspy.Stream, "_obspy_resample", obspy.Stream.resample)
+obspy.Stream._obspy_resample = _obspy_resample
 obspy.Stream.resample = stream_resample
 
 

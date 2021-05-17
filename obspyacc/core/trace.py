@@ -6,7 +6,7 @@ from typing import Union, Callable
 
 import cupy
 import numpy as np
-import time
+from scipy.fft import next_fast_len
 
 import obspy
 from obspy.core.util.decorator import skip_if_no_data
@@ -18,56 +18,79 @@ from obspyacc.helpers.patcher import obspy_docs
 
 
 # --------------- DATA SYNCHRONISATION --------------
-# TODO: At the moment, you can break this by changing the underlying arrays in-place
-setattr(obspy.Trace, "_gpu_data_update_time", 0)
-setattr(obspy.Trace, "_data_update_time", 0)
+# TODO: At the moment, you can break this by changing the underlying arrays
+#  in-place - this also keeps using GPU memory when it isn't needed...
+#  Trade-off between hosting on VRAM for speed and VRAM usage...
+# setattr(obspy.Trace, "_gpu_data_update_time", 0)
+# setattr(obspy.Trace, "_data_update_time", 0)
+#
+#
+# def _set_data(
+#     self: obspy.Trace,
+#     data: np.ndarray,
+# ):
+#     self._data = data
+#     self._data_update_time = time.time()
+#
+#
+# def _get_data(self: obspy.Trace):
+#     if self._gpu_data_update_time > self._data_update_time:
+#         # print("Synchronising gpu data to cpu")
+#         # Synchronise
+#         self.data = gpulib.asnumpy(self._gpu_data)
+#         self._data_update_time = self._gpu_data_update_time
+#     try:
+#         return self._data
+#     except AttributeError:
+#         raise AttributeError("Ensure you imported obspyacc before code")
+#
+#
+# setattr(obspy.Trace, "data", property(fget=_get_data, fset=_set_data))
+#
+#
+# def _set_gpu_data(
+#     self: obspy.Trace,
+#     data: gpulib.array,
+# ):
+#     self.__gpu_data = data
+#     self._gpu_data_update_time = time.time()
+#
+#
+# def _get_gpu_data(self: obspy.Trace):
+#     if self._data_update_time > self._gpu_data_update_time:
+#         # print("Synchronising cpu data to gpu")
+#         # Synchronise
+#         self._gpu_data = gpulib.asarray(self.data)
+#         self._gpu_data_update_time = self._data_update_time
+#     try:
+#         return self.__gpu_data
+#     except AttributeError:
+#         raise AttributeError("Ensure you imported obspyacc before code")
+#
+#
+# setattr(obspy.Trace, "_gpu_data",
+#         property(fget=_get_gpu_data, fset=_set_gpu_data))
 
-
-def _set_data(
-    self: obspy.Trace,
-    data: np.ndarray,
-):
-    self._data = data
-    self._data_update_time = time.time()
-
-
-def _get_data(self: obspy.Trace):
-    if self._gpu_data_update_time > self._data_update_time:
-        # print("Synchronising gpu data to cpu")
-        # Synchronise
-        self.data = gpulib.asnumpy(self._gpu_data)
-        self._data_update_time = self._gpu_data_update_time
-    try:
-        return self._data
-    except AttributeError:
-        raise AttributeError("Ensure you imported obspyacc before code")
-
-
-setattr(obspy.Trace, "data", property(fget=_get_data, fset=_set_data))
-
+# -------------------- GPU DATA ACCESS -----------------
 
 def _set_gpu_data(
     self: obspy.Trace,
-    data: gpulib.array,
+    data: gpulib.array
 ):
-    self.__gpu_data = data
-    self._gpu_data_update_time = time.time()
+    # Move data to RAM
+    self.data = gpulib.asnumpy(data)
 
 
-def _get_gpu_data(self: obspy.Trace):
-    if self._data_update_time > self._gpu_data_update_time:
-        # print("Synchronising cpu data to gpu")
-        # Synchronise
-        self._gpu_data = gpulib.asarray(self.data)
-        self._gpu_data_update_time = self._data_update_time
-    try:
-        return self.__gpu_data
-    except AttributeError:
-        raise AttributeError("Ensure you imported obspyacc before code")
+def _get_gpu_data(
+    self: obspy.Trace
+):
+    # Move data to GPU
+    return gpulib.asarray(self.data)
 
 
-setattr(obspy.Trace, "_gpu_data",
-        property(fget=_get_gpu_data, fset=_set_gpu_data))
+if HAS_GPU:
+    setattr(obspy.Trace, "_gpu_data",
+            property(fget=_get_gpu_data, fset=_set_gpu_data))
 
 
 # --------------- GPU MEMORY MANAGEMENT --------------
@@ -114,7 +137,8 @@ def trace_resample(
         strict_length=strict_length)
 
     # Get the window to convolve and stabalise resampling
-    large_w = get_resample_window(window=window, npts=self.stats.npts)
+    fftlen = next_fast_len(self.stats.npts)
+    large_w = get_resample_window(window=window, npts=fftlen)
 
     # Do the resampling!
     if target.upper() == "GPU" and HAS_GPU:
@@ -128,7 +152,8 @@ def trace_resample(
         resample_func = numba_resample
 
     data = resample_func(
-        data=data, npts_in=self.stats.npts, delta_in=self.stats.delta,
+        data=data, npts_in=self.stats.npts,
+        fftlen=fftlen, delta_in=self.stats.delta,
         factor=factor, sampling_rate_out=sampling_rate, large_w=large_w)
     if target.upper() == "GPU" and HAS_GPU:
         self._gpu_data = data.get()  # synchronisation taken care of elsewhere

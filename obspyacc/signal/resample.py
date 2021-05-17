@@ -1,9 +1,9 @@
 """ Frequency domain resampling. """
-
 from typing import List
 from functools import lru_cache
 
 import numpy as np
+import scipy.fft as fftlib
 
 from obspyacc import HAS_GPU
 if HAS_GPU:
@@ -15,9 +15,12 @@ else:
 
 from numba import njit, objmode
 
+# from obspyacc.helpers.profilers import measure_time
+
 
 # --------------------------- HELPER FUNCS ----------------------------------
 
+# @measure_time
 @lru_cache
 def get_resample_window(window, npts):
     from scipy.signal import get_window
@@ -37,6 +40,7 @@ def get_resample_window(window, npts):
     return large_w
 
 
+# @measure_time
 def prep_for_resample(trace, sampling_rate, strict_length, no_filter):
     factor = trace.stats.sampling_rate / float(sampling_rate)
     # check if end time changes and this is not explicitly allowed
@@ -59,26 +63,28 @@ def prep_for_resample(trace, sampling_rate, strict_length, no_filter):
 
 # ------------------------------ RESAMPLERS ---------------------------------
 
+# @measure_time
 def cupy_resample(
     data: np.ndarray,
     npts_in: int,
+    fftlen: int,
     delta_in: float,
     factor: float,
     sampling_rate_out: float,
     large_w: np.ndarray = None,
 ):
-    x = fft.rfft(data)
+    x = fft.rfft(data, n=fftlen)
     x_r, x_i = cp.real(x), cp.imag(x)
 
     if large_w is not None:
-        x_r *= large_w[:npts_in // 2 + 1]
-        x_i *= large_w[:npts_in // 2 + 1]
+        x_r *= large_w[:fftlen // 2 + 1]
+        x_i *= large_w[:fftlen // 2 + 1]
 
     # interpolate
     num = int(npts_in / factor)
     df = 1.0 / (npts_in * delta_in)
     d_large_f = 1.0 / num * sampling_rate_out
-    f = df * cp.arange(0, npts_in // 2 + 1, dtype=cp.int32)
+    f = df * cp.arange(0, fftlen // 2 + 1, dtype=cp.int32)
     n_large_f = num // 2 + 1
     large_f = d_large_f * cp.arange(0, n_large_f, dtype=cp.int32)
 
@@ -88,14 +94,16 @@ def cupy_resample(
     y.real = y_r
     y.imag = y_i
 
-    data = fft.irfft(y) * (float(num) / float(npts_in))
+    data = fft.irfft(y, n=int(fftlen // factor))[0:num] * (float(num) / float(fftlen))
     return data
 
 
-@njit
+# @measure_time
+@njit(fastmath=True)
 def numba_resample(
     data: np.ndarray,
     npts_in: int,
+    fftlen: int,
     delta_in: float,
     factor: float,
     sampling_rate_out: float,
@@ -103,38 +111,43 @@ def numba_resample(
 ):
     x = np.empty_like(data, dtype=np.complex128)
     with objmode(x='complex128[:]'):
-        x = np.fft.rfft(data)
+        x = fftlib.rfft(data, n=fftlen)
+    # x = fftlib.rfft(data, n=fftlen)
     x_r, x_i = np.real(x), np.imag(x)
 
     if large_w is not None:
-        x_r *= large_w[:npts_in // 2 + 1]
-        x_i *= large_w[:npts_in // 2 + 1]
+        x_r *= large_w[:fftlen // 2 + 1]
+        x_i *= large_w[:fftlen // 2 + 1]
 
     # interpolate
     num = int(npts_in / factor)
     df = 1.0 / (npts_in * delta_in)
     d_large_f = 1.0 / num * sampling_rate_out
-    f = df * np.arange(0, npts_in // 2 + 1, dtype=np.int32)
+    f = df * np.arange(0, fftlen // 2 + 1, dtype=np.int32)
     n_large_f = num // 2 + 1
     large_f = d_large_f * np.arange(0, n_large_f, dtype=np.int32)
 
     y_r = np.interp(large_f, f, x_r)
     y_i = np.interp(large_f, f, x_i)
     y = np.empty_like(y_r, dtype=np.complex128)
+    # y.real = y_r
+    # y.imag = y_i
+    # y = x[0:len(real)]
     for i in range(y.shape[0]):
         y[i] = y_r[i] + (y_i[i] * 1j)
 
     data_out = np.empty_like(y, dtype=np.float64)
     with objmode(data_out='float64[:]'):
-        data_out = np.fft.irfft(y)
-
-    data_out *= (float(num) / float(npts_in))
+        # data_out = fftlib.irfft(y)
+        data_out = fftlib.irfft(y, n=int(fftlen // factor))[0:num]
+    data_out *= (float(num) / float(fftlen))
     return data_out
 
 
 def multi_resample(
     data: List[np.ndarray],
     npts_in: List[int],
+    fftlen: List[int],
     delta_in: List[float],
     factor: List[float],
     sampling_rate_out: List[float],
@@ -149,28 +162,25 @@ def multi_resample(
 
     assert target.upper() in ("CPU", "GPU"), f"Target {target} not supported"
 
-    if target.upper() == "CPU":
-        resample_func = numba_resample
-    else:
-        resample_func = cupy_resample
+    params = (dict(
+        data=data[i], npts_in=npts_in[i],
+        fftlen=fftlen[i], delta_in=delta_in[i],
+        factor=factor[i], sampling_rate_out=sampling_rate_out[i],
+        large_w=large_w[i]) for i in range(len(npts_in)))
 
     if target.upper() == "CPU":
-        data_out = []
-        with ThreadPoolExecutor(max_workers=max_workers) as executor:
-            futures = [executor.submit(
-                resample_func, data=data[i], npts_in=npts_in[i],
-                delta_in=delta_in[i], factor=factor[i],
-                sampling_rate_out=sampling_rate_out[i],
-                large_w=large_w[i])
-                for i in range(len(npts_in))]
-            for future in futures:
-                data_out.append(future.result())
+        if max_workers > 1:
+            data_out = []
+            with ThreadPoolExecutor(max_workers=max_workers) as executor:
+                futures = executor.map(
+                    lambda param: numba_resample(**param), params)
+                for future in futures:
+                    data_out.append(future)
+        else:
+            data_out = [numba_resample(**param) for param in params]
     else:
-        futures = [resample_func(
-            data=data[i], npts_in=npts_in[i], delta_in=delta_in[i],
-            factor=factor[i], sampling_rate_out=sampling_rate_out[i],
-            large_w=large_w[i]) for i in range(len(npts_in))]
-        data_out = [f.get() for f in futures]  # Get the results form the GPU
+        data_out = [cupy_resample(**param).get() for param in params]
+        # data_out = [f.get() for f in futures]  # Get the results form the GPU
 
     return data_out
 
