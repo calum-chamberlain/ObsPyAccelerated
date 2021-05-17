@@ -3,6 +3,7 @@ Methods for monkey patching ObsPy Stream methods.
 """
 
 from typing import Union, Callable
+import warnings
 
 import numpy as np
 from scipy.fft import next_fast_len
@@ -45,7 +46,6 @@ def stream_resample(
     window: Union[str, Callable, np.ndarray] = "hanning",
     no_filter: bool = True,
     strict_length: bool = False,
-    target: str = "CPU",
     max_workers: int = None,
 ) -> obspy.core.Stream:
     """
@@ -58,6 +58,11 @@ def stream_resample(
         Either CPU or GPU to target running on the CPU or GPU
 
     """
+    target = {tr.target or "CPU" for tr in stream}
+    if len(target) > 1:
+        warnings.warn("Multiple targets found in traces, defaulting to CPU")
+        target = {"CPU"}
+    target = target.pop()
     assert target.upper() in ("CPU", "GPU"), f"Target {target} not supported"
     if isinstance(stream, obspy.core.Trace):
         traces = [stream]

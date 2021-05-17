@@ -94,7 +94,7 @@ def cupy_resample(
     y.real = y_r
     y.imag = y_i
 
-    data = fft.irfft(y, n=int(fftlen // factor))[0:num] * (float(num) / float(fftlen))
+    data = fft.irfft(y, n=int(fftlen / factor))[0:num] * (float(num) / float(fftlen))
     return data
 
 
@@ -139,7 +139,7 @@ def numba_resample(
     data_out = np.empty_like(y, dtype=np.float64)
     with objmode(data_out='float64[:]'):
         # data_out = fftlib.irfft(y)
-        data_out = fftlib.irfft(y, n=int(fftlen // factor))[0:num]
+        data_out = fftlib.irfft(y, n=int(fftlen / factor))[0:num]
     data_out *= (float(num) / float(fftlen))
     return data_out
 

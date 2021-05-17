@@ -87,13 +87,8 @@ def _get_gpu_data(
     # Move data to GPU
     return gpulib.asarray(self.data)
 
-
-if HAS_GPU:
-    setattr(obspy.Trace, "_gpu_data",
-            property(fget=_get_gpu_data, fset=_set_gpu_data))
-
-
 # --------------- GPU MEMORY MANAGEMENT --------------
+
 
 def release_vram(self: obspy.Trace):
     mempool = gpulib.get_default_memory_pool()
@@ -102,15 +97,19 @@ def release_vram(self: obspy.Trace):
     pinned_mempool.free_all_blocks()
 
 
-setattr(obspy.Trace, "release_vram", release_vram)
-
-
 def delete(self: obspy.Trace):
     # Clean up
     self.release_vram()
 
 
-setattr(obspy.Trace, "__del__", delete)
+if HAS_GPU:
+    setattr(obspy.Trace, "target", "GPU")
+    setattr(obspy.Trace, "_gpu_data",
+            property(fget=_get_gpu_data, fset=_set_gpu_data))
+    setattr(obspy.Trace, "release_vram", release_vram)
+    setattr(obspy.Trace, "__del__", delete)
+else:
+    setattr(obspy.Trace, "target", "CPU")
 
 # --------------- GPU METHODS ------------------------
 
@@ -123,7 +122,6 @@ def trace_resample(
     window: Union[str, Callable, np.ndarray] = "hanning",
     no_filter: bool = True,
     strict_length: bool = False,
-    target: str = "GPU",
     *args, **kwargs
 ) -> obspy.Trace:
     """
@@ -131,6 +129,7 @@ def trace_resample(
 
     {obspy_docs}
     """
+    target = self.target or "CPU"
     assert target.upper() in ("CPU", "GPU"), f"Target {target} not supported"
     self, factor = prep_for_resample(
         trace=self, sampling_rate=sampling_rate, no_filter=no_filter,
