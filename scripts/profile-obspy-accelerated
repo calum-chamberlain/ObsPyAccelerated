@@ -4,127 +4,198 @@ Profile features - comparison between obspy and obscupy.
 """
 
 import logging
-import time
 
-from typing import Union, Iterable, List, Tuple, Callable
+from typing import Union, Iterable, List
+from functools import lru_cache
 
+import numpy as np
+
+import obspyacc
+from obspyacc import HAS_GPU
+from obspyacc.helpers.profilers import Timer
+
+from obspy import Trace, Stream
 
 Logger = logging.getLogger("Profiler")
 
+DEFAULT_SAMPLE_RATE = 100.0
 
-def time_function(
-    function: Callable,
+
+# -------------------------- TRACE SIMULATION ----------------------------
+@lru_cache
+def _random_trace(npts: int, sampling_rate: float = DEFAULT_SAMPLE_RATE):
+    tr = Trace()
+    tr.data = np.random.randn(int(npts))
+    tr.stats.sampling_rate = sampling_rate
+    return tr
+
+
+# ------------------------- TIME HELPER CLASS ----------------------------
+
+class Timings:
+    def __init__(self, cpu_times: List = None, gpu_times: List = None,
+                 obspy_times: List = None, lengths: List = None):
+        self.lengths = lengths or []
+        self.cpu_times = cpu_times or []
+        self.gpu_times = gpu_times or []
+        self.obspy_times = obspy_times or []
+
+    def plot(self):
+        import matplotlib.pyplot as plt
+
+        fig, ax = plt.subplots()
+
+        bar_positions = np.arange(len(self.lengths))
+        barwidth = 0.2
+
+        obspy_bar = ax.bar(
+            bar_positions - (1.5 * barwidth), self.obspy_times, barwidth,
+            label="ObsPy")
+        cpu_bar = ax.bar(
+            bar_positions, self.cpu_times, barwidth, label="CPU Accelerated")
+        gpu_bar = ax.bar(
+            bar_positions + (1.5 * barwidth), self.gpu_times, barwidth,
+            label="GPU Accelerated")
+
+        ax.set_xticks(bar_positions)
+        ax.set_xticklabels(self.lengths)
+        ax.set_xlabel("Data length")
+        ax.set_ylabel("Time (s)")
+
+        ax.legend()
+
+        return fig
+
+    def write(self, filename: str):
+        """ Write a csv formatted summary of timings. """
+        out = ["Length,ObsPy (s),CPU Accelerate (s),GPU Accelerated (s)"]
+        out.append(
+            [",".join([_len, obs, cpu, gpu]) for _len, obs, cpu, gpu in zip(
+                self.lengths, self.obspy_times, self.cpu_times,
+                self.gpu_times)])
+        out = "\n".join(out)
+        with open(filename, "w") as f:
+            f.write(out)
+
+
+def profile_trace_method(
+    method: str,
     data_len: Union[int, Iterable],
-    repeats: int = 3
-) -> List[Tuple[int, float]]:
-    """
-    Time a given function.
-
-    Parameters
-    ----------
-    function
-    data_len
-    repeats
-
-    Returns
-    -------
-
-    """
-    if not isinstance(data_len, Iterable):
-        data_len = (data_len, )
-    times = list()
+    repeats: int,
+    args: tuple = (),
+    kwargs: dict = dict()
+) -> Timings:
+    # Convert arguments to something sensible
+    _args = []
+    for arg in args:
+        try:
+            arg = float(arg)
+            Logger.debug(f"Interpreting {arg} as float")
+        except ValueError:
+            Logger.debug(f"Interpreting {arg} as str")
+        _args.append(arg)
+    args = tuple(_args)
+    print(args)
+    times = Timings()
+    if isinstance(data_len, int):
+        data_len = [data_len]
+    timer = Timer(verbose=False, name="Resample")
     for _data_len in data_len:
-        run_time = 0
-        for repeat in range(repeats):
+        Logger.info(f"Timing for {_data_len}")
+        tr = _random_trace(_data_len)
+        _times = dict(numba=0, cupy=0, obspy=0)
+        for i in range(repeats):
+            Logger.debug(f"\tRepeat {i + 1} of {repeats}")
+            # Time ObsPy
+            with timer:
+                tr.copy().__getattribute__(
+                    "_".join(["_obspy", method])).__call__(*args, **kwargs)
+            _times["obspy"] += timer.time
+            Logger.debug(f"\tObspy {method} took {timer.time} seconds")
+
+            # Time CPU
+            tr.target = "CPU"
+            with timer:
+                tr.copy().__getattribute__(method).__call__(*args, **kwargs)
+            _times["numba"] += timer.time
             Logger.debug(
-                f"Running for data length: {_data_len}, repeat {repeat}")
-            # TODO: time.time might not be the most accurate way to do this.
-            tic = time.time()
-            # TODO: Call function
-            toc = time.time()
-            run_time += (toc - tic)
-        run_time /= repeats
-        Logger.info(
-            f"{function} took {run_time:0.2e}s for data length: {_data_len}")
-        times.append((_data_len, run_time))
+                f"\tCPU accelerated {method} took {timer.time} seconds")
+
+            if not HAS_GPU:
+                continue
+            # Time GPU
+            tr.target = "CPU"
+            with timer:
+                tr.copy().__getattribute__(method).__call__(*args, **kwargs)
+            _times["cupy"] += timer.time
+            Logger.debug(
+                f"\tGPU accelerated {method} took {timer.time} seconds")
+        numba_time = _times["numba"] / repeats
+        cupy_time = _times["cupy"] / repeats
+        obspy_time = _times["obspy"] / repeats
+        times.lengths.append(_data_len)
+        times.obspy_times.append(obspy_time)
+        Logger.info(f"Obspy took {obspy_time} s")
+        times.cpu_times.append(numba_time)
+        Logger.info(f"CPU accelerated took {numba_time} s")
+        if HAS_GPU:
+            times.gpu_times.append(cupy_time)
+            Logger.info(f"GPU accelerated took {cupy_time} s")
     return times
 
 
-def plot_times(times: dict, data_len: Union[int, Iterable]):
-    """
-    Plot the time difference between obspy and obscupy
-
-    Parameters
-    ----------
-    times
-    data_len
-
-    Returns
-    -------
-
-    """
+def profile(
+    function: str,
+    data_len: Union[int, Iterable] = None,
+    repeats: int = 10,
+    args: tuple = None,
+    kwargs: dict = dict(),
+):
     import matplotlib.pyplot as plt
 
-    fig, ax = plt.subplots()
+    if data_len is None:
+        hours = [0.1, 0.25, 0.5]
+        hours.extend(list(np.arange(1, 24)))
+        data_len = np.array(hours) * 3600 * DEFAULT_SAMPLE_RATE
 
-    return fig
-
-
-def write_times(times: dict, data_len: Union[int, Iterable]):
-    """
-    Write out a csv of the times between obspy and obscupy.
-
-    Parameters
-    ----------
-    times
-    data_len
-
-    Returns
-    -------
-
-    """
-    return
-
-
-def profile(function: str, data_len: Union[int, Iterable]):
-    """
-    Profile a given function or method.
-
-    Parameters
-    ----------
-    function
-    data_len
-
-    Returns
-    -------
-
-    """
-    import matplotlib.pyplot as plt
-
-    obspy_function = function.split('.')
-    obspy_function[-1] = "_" + obspy_function[-1]
-    obspy_function = '.'.join(obspy_function)
-    obspy_times = time_function(obspy_function, data_len)
-    obscupy_times = time_function(function, data_len)
-
-    times = {"ObsPy": obspy_times, "ObsCuPy": obscupy_times}
-    print(times)
-    fig = plot_times(times, data_len)
+    if function.split(".")[-2].lower() == "trace":
+        times = profile_trace_method(
+            method=function.split(".")[-1],
+            data_len=data_len, repeats=repeats,
+            args=args, kwargs=kwargs)
+    else:
+        raise NotImplementedError(
+            "I only know how to profile trace methods so far")
+    fig = times.plot()
     plt.show()
-    write_times(times, data_len)
 
 
 if __name__ == "__main__":
     import argparse
 
-    parser = argparse.ArgumentParser("ObsCuPy Profiler")
+    parser = argparse.ArgumentParser("ObsPy Accelerated Profiler")
 
     parser.add_argument(
         "-f", "--function", help="Function to profile", type=str,
         required=True)
     parser.add_argument(
-        "-l", "--data-len", help="Length(s) of data to run for",
-        default=8640000)
+        "-l", "--data-len", help="Length(s) of data to run for", nargs='+',
+        type=int)
+    parser.add_argument(
+        "-r", "--repeats", help="Number of repeats to average over", type=int,
+        default=10)
+    parser.add_argument(
+        "-v", "--verbose", action='store_true', help="Increase output")
+    parser.add_argument(
+        "-a", "--args", help="Arguments for the method", nargs='+')
 
     args = parser.parse_args()
-    profile(args.function, args.data_len)
+    if args.verbose:
+        logging.basicConfig(level=logging.DEBUG)
+    else:
+        logging.basicConfig(level=logging.INFO)
+
+    Logger.info(f"Profiling using args:\n\t {args}")
+
+    profile(args.function, data_len=args.data_len, repeats=args.repeats,
+            args=args.args)

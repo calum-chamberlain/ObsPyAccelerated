@@ -8,9 +8,10 @@ import time
 
 class Timer:
     """ Simple timing context manager. """
-    def __init__(self, name: str = None):
+    def __init__(self, name: str = None, verbose: bool = True):
         self._starttime, self._endtime = None, None
         self.name = name or "Timed function"
+        self.verbose = verbose
 
     @property
     def time(self):
@@ -23,7 +24,8 @@ class Timer:
 
     def __exit__(self, exc_type, exc_val, exc_tb):
         self._endtime = time.perf_counter()
-        print(f"{self.name} took {self.time:.6f} seconds")
+        if self.verbose:
+            print(f"{self.name} took {self.time:.6f} seconds")
 
 
 def measure_time(func):
