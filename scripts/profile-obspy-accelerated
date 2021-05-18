@@ -73,21 +73,21 @@ class Timings:
         barwidth = 0.2
 
         obspy_bar = ax.bar(
-            bar_positions - (1.5 * barwidth), self.obspy_times, barwidth,
+            bar_positions - (1.2 * barwidth), self.obspy_times, barwidth,
             label="ObsPy")
         cpu_bar = ax.bar(
             bar_positions, self.cpu_times, barwidth, label="CPU Accelerated")
-        gpu_bar = ax.bar(
-            bar_positions + (1.5 * barwidth), self.gpu_times, barwidth,
-            label="GPU Accelerated")
+        if len(self.gpu_times):
+            gpu_bar = ax.bar(
+                bar_positions + (1.2 * barwidth), self.gpu_times, barwidth,
+                label="GPU Accelerated")
 
         ax.set_xticks(bar_positions)
-        ax.set_xticklabels(self.lengths)
-        ax.set_xlabel("Data length")
+        ax.set_xticklabels(self.lengths, rotation=30)
+        ax.set_xlabel("Data length (samples)")
         ax.set_ylabel("Time (s)")
 
         ax.legend()
-
         return fig
 
     def write(self, filename: str):
@@ -127,6 +127,11 @@ def profile_stream_method(
     if isinstance(data_len, int):
         data_len = [data_len]
     timer = Timer(name=method, verbose=False)
+
+    # Warm up - CPU accelerated might need to jit compile to a real result
+    st = _random_stream(100, 2)
+    st.__getattribute__(method).__call__(*args, **kwargs)
+
     for _data_len in data_len:
         Logger.info(f"Timing for {_data_len} samples"
                     f"({_data_len / (DEFAULT_SAMPLE_RATE * 3600):.1f} hours)")
@@ -196,6 +201,11 @@ def profile_trace_method(
     if isinstance(data_len, int):
         data_len = [data_len]
     timer = Timer(name=method, verbose=False)
+
+    # Warm up - CPU accelerated might need to jit compile to a real result
+    tr = _random_trace(100)
+    tr.__getattribute__(method).__call__(*args, **kwargs)
+
     for _data_len in data_len:
         Logger.info(f"Timing for {_data_len} samples "
                     f"({_data_len / (DEFAULT_SAMPLE_RATE * 3600):.1f} hours)")
@@ -254,6 +264,7 @@ def profile(
     if data_len is None:
         data_len = _default_times()
 
+    plot_title = f"ObsPyAccelerated: {function}"
     if function.split(".")[-2].lower() == "trace":
         times = profile_trace_method(
             method=function.split(".")[-1],
@@ -264,10 +275,13 @@ def profile(
             method=function.split(".")[-1],
             data_len=data_len, n_traces=n_traces, repeats=repeats,
             args=args, kwargs=kwargs)
+        plot_title += f", {n_traces} traces"
     else:
         raise NotImplementedError(
             "I only know how to profile trace methods so far")
     fig = times.plot()
+    fig.suptitle(plot_title)
+
     plt.show()
 
 

@@ -18,7 +18,7 @@ try:
 except Exception as e:
     print(f"Could not import accelerated fft due to {e}")
     # TODO: We could import pyfftw here.
-    import scipy.fftpack as fftlib
+    import numpy.fft as fftlib
     HAS_GPU = False
 
 

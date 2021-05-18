@@ -7,7 +7,6 @@ from concurrent.futures import ThreadPoolExecutor as Executor
 # from concurrent.futures import ProcessPoolExecutor as Executor
 from multiprocessing import cpu_count
 
-import cupy.cuda.memory
 import numpy as np
 import scipy.fft as fftlib
 
@@ -15,6 +14,7 @@ from obspyacc import HAS_GPU
 if HAS_GPU:
     import cupy as cp
     from cupy import fft
+    import cupy.cuda.memory
 else:
     import numpy as cp
     from scipy import fft

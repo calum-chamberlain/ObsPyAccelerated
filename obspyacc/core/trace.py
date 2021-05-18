@@ -5,7 +5,6 @@ Methods to monkey-patch the obspy.core.Trace object.
 from typing import Union, Callable
 
 import time
-import cupy
 import numpy as np
 from scipy.fft import next_fast_len
 
@@ -145,7 +144,7 @@ def trace_resample(
         data = self._gpu_data
         # Move the window to the GPU
         if large_w is not None:
-            large_w = cupy.asarray(large_w)
+            large_w = gpulib.asarray(large_w)
         resample_func = cupy_resample
     else:
         data = self.data
