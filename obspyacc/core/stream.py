@@ -69,46 +69,27 @@ def stream_resample(
     else:
         traces = stream.traces
 
-    factors, large_ws, data_in, npts_in, delta_in, sampling_rate_out, fftlens = (
-        [], [], [], [], [], [], [])
-    for trace in traces:
-        # Prep the data
-        trace, factor = prep_for_resample(
-            trace, sampling_rate=sampling_rate, no_filter=no_filter,
-            strict_length=strict_length)
 
+    traces, factors = zip(*[prep_for_resample(
+        trace, sampling_rate=sampling_rate, no_filter=no_filter,
+        strict_length=strict_length) for trace in traces])
+    fftlens = [next_fast_len(trace.stats.npts) for trace in traces]
+    large_ws = (get_resample_window(window=window, npts=fftlen)
+                for fftlen in fftlens)
+    npts_in = (tr.stats.npts for tr in traces)
+    delta_in = (tr.stats.delta for tr in traces)
+    sampling_rate_out = (sampling_rate for _ in traces)
+    if HAS_GPU and target.upper() == "GPU":
+        data_in = (trace._gpu_data for trace in traces)
+        large_ws = (cp.asarray(large_w) for large_w in large_ws)
+    else:
+        data_in = (trace.data for trace in traces)
 
-        # Get the window first
-        fftlen = next_fast_len(trace.stats.npts)
-        large_w = get_resample_window(window=window, npts=fftlen)
-
-        if target.upper() == "GPU" and HAS_GPU:
-            data = trace._gpu_data
-            # Move the window to the GPU
-            if large_w is not None:
-                large_w = cp.asarray(large_w)
-        else:
-            data = trace.data
-
-        factors.append(factor)
-        large_ws.append(large_w)
-        data_in.append(data)
-        npts_in.append(trace.stats.npts)
-        delta_in.append(trace.stats.delta)
-        sampling_rate_out.append(sampling_rate)
-        fftlens.append(fftlen)
-
-    try:
-        data_out = multi_resample(
-            data=data_in, npts_in=npts_in, fftlen=fftlens, delta_in=delta_in,
-            factor=factors, sampling_rate_out=sampling_rate_out,
-            large_w=large_ws, target=target, max_workers=max_workers)
-    except Exception as e:
-        print(e)
-        for tr in stream:
-            tr.resample(sampling_rate=sampling_rate, window=window,
-                        target=target, no_filter=no_filter,
-                        strict_length=strict_length)
+    data_out = multi_resample(
+        data=data_in, npts_in=npts_in, fftlen=fftlens, delta_in=delta_in,
+        factor=factors, sampling_rate_out=sampling_rate_out,
+        large_w=large_ws, target=target, max_workers=max_workers,
+        n_traces=len(traces))
 
     for i, trace in enumerate(traces):
         if target.upper() == "GPU" and HAS_GPU:

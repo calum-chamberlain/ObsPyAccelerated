@@ -4,6 +4,7 @@ Methods to monkey-patch the obspy.core.Trace object.
 
 from typing import Union, Callable
 
+import time
 import cupy
 import numpy as np
 from scipy.fft import next_fast_len
@@ -21,71 +22,71 @@ from obspyacc.helpers.patcher import obspy_docs
 # TODO: At the moment, you can break this by changing the underlying arrays
 #  in-place - this also keeps using GPU memory when it isn't needed...
 #  Trade-off between hosting on VRAM for speed and VRAM usage...
-# setattr(obspy.Trace, "_gpu_data_update_time", 0)
-# setattr(obspy.Trace, "_data_update_time", 0)
-#
-#
-# def _set_data(
-#     self: obspy.Trace,
-#     data: np.ndarray,
-# ):
-#     self._data = data
-#     self._data_update_time = time.time()
-#
-#
-# def _get_data(self: obspy.Trace):
-#     if self._gpu_data_update_time > self._data_update_time:
-#         # print("Synchronising gpu data to cpu")
-#         # Synchronise
-#         self.data = gpulib.asnumpy(self._gpu_data)
-#         self._data_update_time = self._gpu_data_update_time
-#     try:
-#         return self._data
-#     except AttributeError:
-#         raise AttributeError("Ensure you imported obspyacc before code")
-#
-#
-# setattr(obspy.Trace, "data", property(fget=_get_data, fset=_set_data))
-#
-#
-# def _set_gpu_data(
-#     self: obspy.Trace,
-#     data: gpulib.array,
-# ):
-#     self.__gpu_data = data
-#     self._gpu_data_update_time = time.time()
-#
-#
-# def _get_gpu_data(self: obspy.Trace):
-#     if self._data_update_time > self._gpu_data_update_time:
-#         # print("Synchronising cpu data to gpu")
-#         # Synchronise
-#         self._gpu_data = gpulib.asarray(self.data)
-#         self._gpu_data_update_time = self._data_update_time
-#     try:
-#         return self.__gpu_data
-#     except AttributeError:
-#         raise AttributeError("Ensure you imported obspyacc before code")
-#
-#
-# setattr(obspy.Trace, "_gpu_data",
-#         property(fget=_get_gpu_data, fset=_set_gpu_data))
+setattr(obspy.Trace, "_gpu_data_update_time", 0)
+setattr(obspy.Trace, "_data_update_time", 0)
 
-# -------------------- GPU DATA ACCESS -----------------
+
+def _set_data(
+    self: obspy.Trace,
+    data: np.ndarray,
+):
+    self._data = data
+    self._data_update_time = time.time()
+
+
+def _get_data(self: obspy.Trace):
+    if self._gpu_data_update_time > self._data_update_time:
+        # print("Synchronising gpu data to cpu")
+        # Synchronise
+        self.data = gpulib.asnumpy(self._gpu_data)
+        self._data_update_time = self._gpu_data_update_time
+    try:
+        return self._data
+    except AttributeError:
+        raise AttributeError("Ensure you imported obspyacc before code")
+
+
+setattr(obspy.Trace, "data", property(fget=_get_data, fset=_set_data))
+
 
 def _set_gpu_data(
     self: obspy.Trace,
-    data: gpulib.array
+    data: gpulib.array,
 ):
-    # Move data to RAM
-    self.data = gpulib.asnumpy(data)
+    self.__gpu_data = data
+    self._gpu_data_update_time = time.time()
 
 
-def _get_gpu_data(
-    self: obspy.Trace
-):
-    # Move data to GPU
-    return gpulib.asarray(self.data)
+def _get_gpu_data(self: obspy.Trace):
+    if self._data_update_time > self._gpu_data_update_time:
+        # print("Synchronising cpu data to gpu")
+        # Synchronise
+        self._gpu_data = gpulib.asarray(self.data)
+        self._gpu_data_update_time = self._data_update_time
+    try:
+        return self.__gpu_data
+    except AttributeError:
+        raise AttributeError("Ensure you imported obspyacc before code")
+
+
+setattr(obspy.Trace, "_gpu_data",
+        property(fget=_get_gpu_data, fset=_set_gpu_data))
+
+# -------------------- GPU DATA ACCESS -----------------
+#
+# def _set_gpu_data(
+#     self: obspy.Trace,
+#     data: gpulib.array
+# ):
+#     # Move data to RAM
+#     self.data = gpulib.asnumpy(data)
+#
+#
+# def _get_gpu_data(
+#     self: obspy.Trace
+# ):
+#     # Move data to GPU
+#     return gpulib.asarray(self.data)
 
 # --------------- GPU MEMORY MANAGEMENT --------------
 

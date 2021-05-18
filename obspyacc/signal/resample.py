@@ -1,7 +1,13 @@
 """ Frequency domain resampling. """
-from typing import List
+from typing import Iterable
 from functools import lru_cache
+from collections import deque
 
+from concurrent.futures import ThreadPoolExecutor as Executor
+# from concurrent.futures import ProcessPoolExecutor as Executor
+from multiprocessing import cpu_count
+
+import cupy.cuda.memory
 import numpy as np
 import scipy.fft as fftlib
 
@@ -15,7 +21,7 @@ else:
 
 from numba import njit, objmode
 
-# from obspyacc.helpers.profilers import measure_time
+from obspyacc.helpers.profilers import measure_time, Timer
 
 
 # --------------------------- HELPER FUNCS ----------------------------------
@@ -88,11 +94,7 @@ def cupy_resample(
     n_large_f = num // 2 + 1
     large_f = d_large_f * cp.arange(0, n_large_f, dtype=cp.int32)
 
-    y_r = cp.interp(large_f, f, x_r)
-    y_i = cp.interp(large_f, f, x_i)
-    y = cp.empty_like(y_r, dtype=complex)
-    y.real = y_r
-    y.imag = y_i
+    y = np.interp(large_f, f, x_r) + (1j * np.interp(large_f, f, x_i))
 
     data = fft.irfft(y, n=int(fftlen / factor))[0:num] * (float(num) / float(fftlen))
     return data
@@ -127,14 +129,7 @@ def numba_resample(
     n_large_f = num // 2 + 1
     large_f = d_large_f * np.arange(0, n_large_f, dtype=np.int32)
 
-    y_r = np.interp(large_f, f, x_r)
-    y_i = np.interp(large_f, f, x_i)
-    y = np.empty_like(y_r, dtype=np.complex128)
-    # y.real = y_r
-    # y.imag = y_i
-    # y = x[0:len(real)]
-    for i in range(y.shape[0]):
-        y[i] = y_r[i] + (y_i[i] * 1j)
+    y = np.interp(large_f, f, x_r) + (1j * np.interp(large_f, f, x_i))
 
     data_out = np.empty_like(y, dtype=np.float64)
     with objmode(data_out='float64[:]'):
@@ -145,42 +140,69 @@ def numba_resample(
 
 
 def multi_resample(
-    data: List[np.ndarray],
-    npts_in: List[int],
-    fftlen: List[int],
-    delta_in: List[float],
-    factor: List[float],
-    sampling_rate_out: List[float],
-    large_w: List[np.ndarray],
+    data: Iterable[np.ndarray],
+    npts_in: Iterable[int],
+    fftlen: Iterable[int],
+    delta_in: Iterable[float],
+    factor: Iterable[float],
+    sampling_rate_out: Iterable[float],
+    large_w: Iterable[np.ndarray],
+    n_traces: int,
     target: str = "CPU",
-    max_workers: int = None
+    max_workers: int = None,
+    chunksize: int = None,
 ):
-    from concurrent.futures import ThreadPoolExecutor
-    from multiprocessing import cpu_count
-
-    max_workers = min(max_workers or cpu_count(), len(data))
+    max_workers = min(max_workers or cpu_count(), n_traces)
+    if target.upper() == "CPU":
+        chunksize = chunksize or n_traces // max_workers
+    else:
+        chunksize = chunksize or n_traces
 
     assert target.upper() in ("CPU", "GPU"), f"Target {target} not supported"
 
     params = (dict(
-        data=data[i], npts_in=npts_in[i],
-        fftlen=fftlen[i], delta_in=delta_in[i],
-        factor=factor[i], sampling_rate_out=sampling_rate_out[i],
-        large_w=large_w[i]) for i in range(len(npts_in)))
+        data=_data, npts_in=_npts_in, fftlen=_fftlen, delta_in=_delta_in,
+        factor=_factor, sampling_rate_out=_sampling_rate_out,
+        large_w=_large_w)
+        for _data, _npts_in, _fftlen, _delta_in, _factor, _sampling_rate_out, _large_w
+        in zip(data, npts_in, fftlen, delta_in, factor, sampling_rate_out, large_w))
 
     if target.upper() == "CPU":
         if max_workers > 1:
             data_out = []
-            with ThreadPoolExecutor(max_workers=max_workers) as executor:
+            with Executor(max_workers=max_workers) as executor:
                 futures = executor.map(
-                    lambda param: numba_resample(**param), params)
+                    lambda param: numba_resample(**param), params,
+                    chunksize=chunksize)
                 for future in futures:
                     data_out.append(future)
         else:
             data_out = [numba_resample(**param) for param in params]
     else:
-        data_out = [cupy_resample(**param).get() for param in params]
-        # data_out = [f.get() for f in futures]  # Get the results form the GPU
+        data_out, futures, i = [], deque([]), 0
+        _mem_limited = False
+        while i < n_traces:
+            if not _mem_limited:
+                # Only get the next one if the previous one succeded
+                param = next(params)
+            try:
+                futures.append(cupy_resample(**param))
+                _mem_limited = False
+                # Make sure we reset this if we previously hit the limit
+            except cupy.cuda.memory.OutOfMemoryError:
+                print("Hit memory limit of GPU")
+                chunksize = len(futures) - 1
+                _mem_limited = True  # Set to rerun previous chunk
+            while len(futures) >= chunksize:  # Cope with change to chunksize on memory error
+                # Empty one from the queue
+                data_out.append(futures.popleft().get())
+            if not _mem_limited:
+                i += 1
+            else:
+                print("Hit memory limit, re-running")
+        while len(futures):
+            data_out.append(futures.popleft().get())
+        assert len(data_out) == n_traces
 
     return data_out
 

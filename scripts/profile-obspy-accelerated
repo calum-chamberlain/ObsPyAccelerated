@@ -21,13 +21,37 @@ Logger = logging.getLogger("Profiler")
 DEFAULT_SAMPLE_RATE = 100.0
 
 
+def _default_times():
+    # hours = [0.1, 0.25, 0.5]
+    # hours.extend(list(np.arange(1, 24, 3)))
+    hours = np.arange(6, 49, 6)
+    data_len = np.array(hours) * 3600 * DEFAULT_SAMPLE_RATE
+    data_len = data_len.astype(np.int32)
+    # data_len += 1
+    return data_len
+
+
 # -------------------------- TRACE SIMULATION ----------------------------
-@lru_cache
-def _random_trace(npts: int, sampling_rate: float = DEFAULT_SAMPLE_RATE):
+def _random_trace(
+    npts: int,
+    sampling_rate: float = DEFAULT_SAMPLE_RATE
+) -> Trace:
     tr = Trace()
     tr.data = np.random.randn(int(npts))
     tr.stats.sampling_rate = sampling_rate
     return tr
+
+
+def _random_stream(
+    npts: int,
+    n_traces: int,
+    sampling_rate: float = DEFAULT_SAMPLE_RATE
+) -> Stream:
+    st = Stream([_random_trace(npts=npts, sampling_rate=sampling_rate)
+                for _ in range(n_traces)])
+    for i, tr in enumerate(st):
+        tr.id = f"XX.{i:04d}.10.EHZ"
+    return st
 
 
 # ------------------------- TIME HELPER CLASS ----------------------------
@@ -77,6 +101,78 @@ class Timings:
         with open(filename, "w") as f:
             f.write(out)
 
+# ----------------------------- PROFILERS -------------------------------
+
+
+def profile_stream_method(
+    method: str,
+    data_len: Union[int, Iterable],
+    n_traces: int,
+    repeats: int,
+    args: tuple = (),
+    kwargs: dict = dict()
+) -> Timings:
+    # Convert arguments to something sensible
+    _args = []
+    for arg in args:
+        try:
+            arg = float(arg)
+            Logger.debug(f"Interpreting {arg} as float")
+        except ValueError:
+            Logger.debug(f"Interpreting {arg} as str")
+        _args.append(arg)
+    args = tuple(_args)
+    print(args)
+    times = Timings()
+    if isinstance(data_len, int):
+        data_len = [data_len]
+    timer = Timer(name=method, verbose=False)
+    for _data_len in data_len:
+        Logger.info(f"Timing for {_data_len} samples"
+                    f"({_data_len / (DEFAULT_SAMPLE_RATE * 3600):.1f} hours)")
+        st = _random_stream(_data_len, n_traces)
+        _times = dict(numba=0, cupy=0, obspy=0)
+        for i in range(repeats):
+            Logger.debug(f"\tRepeat {i + 1} of {repeats}")
+            # Time ObsPy
+            with timer:
+                st.copy().__getattribute__(
+                    "_".join(["_obspy", method])).__call__(*args, **kwargs)
+            _times["obspy"] += timer.time
+            Logger.debug(f"\tObspy {method} took {timer.time} seconds")
+
+            # Time CPU
+            for tr in st:
+                tr.target = "CPU"
+            with timer:
+                st.copy().__getattribute__(method).__call__(*args, **kwargs)
+            _times["numba"] += timer.time
+            Logger.debug(
+                f"\tCPU accelerated {method} took {timer.time} seconds")
+
+            if not HAS_GPU:
+                continue
+            # Time GPU
+            for tr in st:
+                tr.target = "GPU"
+            with timer:
+                st.copy().__getattribute__(method).__call__(*args, **kwargs)
+            _times["cupy"] += timer.time
+            Logger.debug(
+                f"\tGPU accelerated {method} took {timer.time} seconds")
+        numba_time = _times["numba"] / repeats
+        cupy_time = _times["cupy"] / repeats
+        obspy_time = _times["obspy"] / repeats
+        times.lengths.append(_data_len)
+        times.obspy_times.append(obspy_time)
+        Logger.info(f"Obspy took {obspy_time} s")
+        times.cpu_times.append(numba_time)
+        Logger.info(f"CPU accelerated took {numba_time} s")
+        if HAS_GPU:
+            times.gpu_times.append(cupy_time)
+            Logger.info(f"GPU accelerated took {cupy_time} s")
+    return times
+
 
 def profile_trace_method(
     method: str,
@@ -99,9 +195,10 @@ def profile_trace_method(
     times = Timings()
     if isinstance(data_len, int):
         data_len = [data_len]
-    timer = Timer(verbose=False, name="Resample")
+    timer = Timer(name=method, verbose=False)
     for _data_len in data_len:
-        Logger.info(f"Timing for {_data_len}")
+        Logger.info(f"Timing for {_data_len} samples "
+                    f"({_data_len / (DEFAULT_SAMPLE_RATE * 3600):.1f} hours)")
         tr = _random_trace(_data_len)
         _times = dict(numba=0, cupy=0, obspy=0)
         for i in range(repeats):
@@ -124,7 +221,7 @@ def profile_trace_method(
             if not HAS_GPU:
                 continue
             # Time GPU
-            tr.target = "CPU"
+            tr.target = "GPU"
             with timer:
                 tr.copy().__getattribute__(method).__call__(*args, **kwargs)
             _times["cupy"] += timer.time
@@ -148,20 +245,24 @@ def profile(
     function: str,
     data_len: Union[int, Iterable] = None,
     repeats: int = 10,
+    n_traces: int = 12,
     args: tuple = None,
     kwargs: dict = dict(),
 ):
     import matplotlib.pyplot as plt
 
     if data_len is None:
-        hours = [0.1, 0.25, 0.5]
-        hours.extend(list(np.arange(1, 24)))
-        data_len = np.array(hours) * 3600 * DEFAULT_SAMPLE_RATE
+        data_len = _default_times()
 
     if function.split(".")[-2].lower() == "trace":
         times = profile_trace_method(
             method=function.split(".")[-1],
             data_len=data_len, repeats=repeats,
+            args=args, kwargs=kwargs)
+    elif function.split('.')[-2].lower() == "stream":
+        times = profile_stream_method(
+            method=function.split(".")[-1],
+            data_len=data_len, n_traces=n_traces, repeats=repeats,
             args=args, kwargs=kwargs)
     else:
         raise NotImplementedError(
@@ -182,6 +283,9 @@ if __name__ == "__main__":
         "-l", "--data-len", help="Length(s) of data to run for", nargs='+',
         type=int)
     parser.add_argument(
+        "-t", "--traces", help="Number of traces to simulate", type=int,
+        default=12)
+    parser.add_argument(
         "-r", "--repeats", help="Number of repeats to average over", type=int,
         default=10)
     parser.add_argument(
@@ -191,11 +295,15 @@ if __name__ == "__main__":
 
     args = parser.parse_args()
     if args.verbose:
-        logging.basicConfig(level=logging.DEBUG)
+        logging.basicConfig(
+            level=logging.DEBUG,
+            format="%(asctime)s\t%(name)s\t%(levelname)s\t%(message)s")
     else:
-        logging.basicConfig(level=logging.INFO)
+        logging.basicConfig(
+            level=logging.INFO,
+            format="%(asctime)s\t%(name)s\t%(levelname)s\t%(message)s")
 
     Logger.info(f"Profiling using args:\n\t {args}")
 
     profile(args.function, data_len=args.data_len, repeats=args.repeats,
-            args=args.args)
+            n_traces=args.traces, args=args.args)
