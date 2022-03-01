@@ -1,0 +1,4 @@
+LIBRARY litsignal.pyd
+EXPORTS
+    interpolate
+    resample
