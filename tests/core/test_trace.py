@@ -15,7 +15,7 @@ import obspyacc  # Unused import
 class TestTrace(unittest.TestCase):
     def test_resample(self):
         st = read().detrend()
-        for samp_rate in (100, 75, 65, 50, 25, 10):
+        for samp_rate in range(10, 150, 5):
             for tr in st:
                 obspy_resampled = tr.copy()._obspy_resample(samp_rate)
                 for target in ("CPU", "GPU"):
