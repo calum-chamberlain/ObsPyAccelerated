@@ -1,3 +1,5 @@
+**Unfinished, do not use**
+
 # ObsPyAccelerated: GPU enhanced ObsPy
 
 Accelerate your observational seismology workflows by harnessing the power
